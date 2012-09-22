@@ -19,6 +19,7 @@
 
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
+static list timer_list;
 
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
@@ -37,6 +38,7 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init(&timer_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -89,11 +91,19 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
-  int64_t start = timer_ticks ();
+  int64_t now = timer_ticks ();
 
-  ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  thread* cur = thread_current();
+  cur->wait = now + ticks;
+
+  enum intr_level old_level;
+  old_level = intr_disable ();
+
+  list_insert(&cur->wait_timer, &timer_list);
+
+  intr_set_level (old_level);
+
+  sema_down(&cur->block_me);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -164,13 +174,19 @@ void
 timer_print_stats (void) 
 {
   printf ("Timer: %"PRId64" ticks\n", timer_ticks ());
-}
+}list_push_back (&ready_list, &t->elem);
 
 /* Timer interrupt handler. */
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
+  for (e = list_begin (&timer_list); e != list_end (&timer_list);
+       e = list_next (e))
+    {
+      struct thread *t = list_entry (e, struct thread, wait_timer);
+      if (t->wait <= ticks) sema_up(&t->block_me);
+    }
   thread_tick ();
 }
 
